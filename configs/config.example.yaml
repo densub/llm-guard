@@ -1,0 +1,68 @@
+# Example llm-guard configuration.
+# `llmguard init` writes this file to ~/.config/llmguard/config.yaml.
+
+# Address the local proxy listens on. Point your agent's API base URL here.
+listen: "127.0.0.1:8317"
+
+# The real LLM API to forward (redacted) requests to. Any base URL works —
+# llm-guard passes through method, path, query string, and headers.
+upstream: "https://api.anthropic.com"
+
+# Redaction events (category + count, never raw values) are appended here.
+log_file: "~/.local/share/llmguard/redactions.log"
+
+detectors:
+  regex:
+    enabled: true
+    builtin_categories:
+      - aws_access_key
+      - aws_secret_key
+      - gcp_api_key
+      - github_token
+      - gitlab_token
+      - slack_token
+      - stripe_key
+      - openai_key
+      - anthropic_key
+      - private_key_block
+      - jwt
+      - generic_api_key_assignment
+      - email
+    # Add your own patterns, e.g. internal project codenames:
+    custom_patterns: []
+    #   - name: internal_proj
+    #     pattern: 'PROJ-[0-9]{4,6}'
+
+  # Optional local-LLM semantic detection pass for free-form sensitive
+  # content regex can't catch (e.g. names, internal codenames, addresses).
+  # Run `llmguard models pull` to download the llama-server binary and a
+  # small GGUF model and populate server_path/model_path below, then set
+  # enabled: true. If no prebuilt llama-server is available for your
+  # platform, or the binary/model are missing, llm-guard logs a warning and
+  # falls back to regex-only detection — this never blocks startup or
+  # request handling.
+  llm_fallback:
+    enabled: false
+
+    # Set by `llmguard models pull`.
+    server_path: ""
+    model_path: ""
+
+    # Local port llama-server listens on.
+    port: 8418
+
+    # String fields shorter than min_text_len or longer than max_text_len
+    # (in bytes) are skipped, to avoid wasting time on trivial or huge
+    # fields.
+    min_text_len: 8
+    max_text_len: 2000
+
+    # Per-call timeout for a single llama-server /completion request.
+    request_timeout_ms: 3000
+    # Total time budget for all LLM detector calls within one proxied
+    # request, regardless of how many string fields it contains.
+    overall_timeout_ms: 4000
+
+    # ggml-org/llama.cpp release tag `models pull` downloads from, or
+    # "latest".
+    llamacpp_release: "latest"
