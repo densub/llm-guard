@@ -35,7 +35,7 @@ func (rw *RestoringWriter) Write(p []byte) (int, error) {
 		if _, err := rw.w.Write(restored); err != nil {
 			return 0, err
 		}
-		rw.buf = append([]byte(nil), rw.buf[cut:]...)
+		rw.buf = rw.buf[cut:]
 		if rw.flusher != nil {
 			rw.flusher.Flush()
 		}

@@ -11,6 +11,11 @@ upstream: "https://api.anthropic.com"
 # Redaction events (category + count, never raw values) are appended here.
 log_file: "~/.local/share/llmguard/redactions.log"
 
+# Cache redaction results for identical string fields across requests.
+cache:
+  enabled: true
+  max_entries: 10000
+
 detectors:
   regex:
     enabled: true
@@ -62,6 +67,15 @@ detectors:
     # Total time budget for all LLM detector calls within one proxied
     # request, regardless of how many string fields it contains.
     overall_timeout_ms: 4000
+
+    # Skip the LLM pass for a string when regex already found matches.
+    skip_if_regex_matched: false
+
+    # Parallel LLM calls per request (when batching is disabled).
+    concurrency: 4
+
+    # Strings per batched LLM /completion call. Set to 1 to disable batching.
+    batch_size: 8
 
     # ggml-org/llama.cpp release tag `models pull` downloads from, or
     # "latest".

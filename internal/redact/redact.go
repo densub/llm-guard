@@ -1,7 +1,3 @@
-// Package redact implements the redaction/restoration engine: it scans
-// request bodies for sensitive substrings, replaces them with stable
-// placeholder tokens, and later restores those placeholders in response
-// bodies using an in-memory mapping store.
 package redact
 
 import (
@@ -11,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"llmguard/internal/redact/detectors"
@@ -26,27 +23,67 @@ type ContextDetector interface {
 	DetectWithContext(ctx context.Context, text string) []detectors.Match
 }
 
+// BatchContextDetector is an optional interface for detectors that can score
+// multiple strings in one remote call.
+type BatchContextDetector interface {
+	DetectBatchWithContext(ctx context.Context, texts []string) [][]detectors.Match
+}
+
+// RedactorOptions configures optional redactor behavior.
+type RedactorOptions struct {
+	Cache                 *DetectionCache
+	SkipLLMIfRegexMatched bool
+	LLMConcurrency        int
+	LLMBatchSize          int
+}
+
 // Redactor scans and rewrites request/response bodies using a set of
 // detectors backed by a shared mapping Store.
 type Redactor struct {
-	detectors []detectors.Detector
-	store     *Store
-	llmBudget time.Duration
+	detectors             []detectors.Detector
+	store                 *Store
+	llmBudget             time.Duration
+	cache                 *DetectionCache
+	skipLLMIfRegexMatched bool
+	llmConcurrency        int
+	llmBatchSize          int
 }
 
 // New creates a Redactor backed by store, applying the given detectors in
 // order. llmBudget bounds the total time (across an entire Redact call)
 // available to detectors implementing ContextDetector; pass 0 if no such
 // detectors are configured.
-func New(store *Store, llmBudget time.Duration, dets ...detectors.Detector) *Redactor {
-	return &Redactor{detectors: dets, store: store, llmBudget: llmBudget}
+func New(store *Store, llmBudget time.Duration, opts RedactorOptions, dets ...detectors.Detector) *Redactor {
+	if opts.LLMConcurrency <= 0 {
+		opts.LLMConcurrency = 4
+	}
+	if opts.LLMBatchSize <= 0 {
+		opts.LLMBatchSize = 8
+	}
+	return &Redactor{
+		detectors:             dets,
+		store:                 store,
+		llmBudget:             llmBudget,
+		cache:                 opts.Cache,
+		skipLLMIfRegexMatched: opts.SkipLLMIfRegexMatched,
+		llmConcurrency:        opts.LLMConcurrency,
+		llmBatchSize:          opts.LLMBatchSize,
+	}
 }
 
 // Redact scans body for sensitive substrings and returns the rewritten body
-// along with the list of categories that were matched (for logging). If body
-// is valid JSON, every string value is scanned recursively; otherwise the raw
-// bytes are scanned as text.
+// along with the list of categories that were matched (for logging).
 func (r *Redactor) Redact(body []byte) ([]byte, []string) {
+	return r.redactBody(body, false)
+}
+
+// RedactForProxy is like Redact but injects the llm-guard system note when
+// redactions occurred.
+func (r *Redactor) RedactForProxy(body []byte) ([]byte, []string) {
+	return r.redactBody(body, true)
+}
+
+func (r *Redactor) redactBody(body []byte, injectNote bool) ([]byte, []string) {
 	ctx := context.Background()
 	if r.llmBudget > 0 {
 		var cancel context.CancelFunc
@@ -59,12 +96,28 @@ func (r *Redactor) Redact(body []byte) ([]byte, []string) {
 
 	var data any
 	if err := dec.Decode(&data); err != nil {
-		redacted, cats := r.redactString(ctx, string(body), false)
+		redacted, cats := r.redactString(ctx, string(body), false, nil)
 		return []byte(redacted), cats
 	}
 
+	llmResults := r.prefetchLLMResults(ctx, data)
+
 	var categories []string
-	walked := r.walk(ctx, data, &categories, false)
+	changed := false
+	walked := r.walk(ctx, data, &categories, false, &changed, llmResults)
+
+	if !changed {
+		if injectNote && len(categories) > 0 {
+			// categories only set when changed; unreachable
+		}
+		return body, categories
+	}
+
+	if injectNote && len(categories) > 0 {
+		if root, ok := walked.(map[string]any); ok {
+			injectGuardNoteIntoData(root, categories)
+		}
+	}
 
 	out, err := json.Marshal(walked)
 	if err != nil {
@@ -74,26 +127,22 @@ func (r *Redactor) Redact(body []byte) ([]byte, []string) {
 }
 
 // Restore replaces any placeholder tokens in data with the original values
-// recorded during Redact. Unknown placeholders are left untouched. Safe to
-// call repeatedly on successive chunks of a streamed response, provided each
-// chunk contains complete placeholder tokens (see PlaceholderMaxLen).
+// recorded during Redact. Unknown placeholders are left untouched.
 func (r *Redactor) Restore(data []byte) []byte {
+	openLen := len(placeholderOpen)
+	closeLen := len(placeholderClose)
 	return placeholderRe.ReplaceAllFunc(data, func(match []byte) []byte {
-		sub := placeholderRe.FindSubmatch(match)
-		if val, ok := r.store.Lookup(string(sub[1])); ok {
+		if len(match) < openLen+closeLen {
+			return match
+		}
+		hash := string(match[openLen : len(match)-closeLen])
+		if val, ok := r.store.Lookup(hash); ok {
 			return []byte(val)
 		}
 		return match
 	})
 }
 
-// protocolKeys are JSON object keys whose values are API protocol/schema
-// fields (model identifiers, tool names, type discriminators, IDs, ...)
-// rather than free-form content. These never contain user-supplied text, and
-// the upstream API requires them verbatim — e.g. rewriting "model" produces
-// an unrecognized model (404), and rewriting "tools[].custom.name" with a
-// placeholder token violates Anthropic's `^[a-zA-Z0-9_-]{1,128}$` pattern
-// (400). They're skipped entirely (no redaction, no recursion).
 var protocolKeys = map[string]bool{
 	"model":         true,
 	"name":          true,
@@ -108,35 +157,145 @@ var protocolKeys = map[string]bool{
 	"tool_choice":   true,
 }
 
-// llmSkipKeys are fields whose content should be scanned by regex detectors
-// but NOT by slow LLM-backed detectors. "system" is the AI provider's system
-// prompt — typically static infrastructure text (tool descriptions, CLAUDE.md
-// injections) rather than user-supplied content, so regex is sufficient and
-// the LLM pass would add seconds of latency scanning thousands of tokens.
 var llmSkipKeys = map[string]bool{
 	"system": true,
 }
 
-// walk recursively visits every value in v. skipLLM suppresses
-// ContextDetector (LLM-backed) detectors for the current subtree while still
-// applying fast regex detectors — used for the "system" prompt field.
-func (r *Redactor) walk(ctx context.Context, v any, categories *[]string, skipLLM bool) any {
+type llmWork struct {
+	hash [32]byte
+	text string
+}
+
+func (r *Redactor) prefetchLLMResults(ctx context.Context, data any) map[[32]byte][]detectors.Match {
+	var llmDet ContextDetector
+	var batchDet BatchContextDetector
+	for _, det := range r.detectors {
+		if cd, ok := det.(ContextDetector); ok {
+			llmDet = cd
+			batchDet, _ = det.(BatchContextDetector)
+			break
+		}
+	}
+	if llmDet == nil {
+		return nil
+	}
+
+	seen := make(map[[32]byte]string)
+	r.collectLLMStrings(data, false, seen)
+	if len(seen) == 0 {
+		return nil
+	}
+
+	work := make([]llmWork, 0, len(seen))
+	for hash, text := range seen {
+		if r.skipLLMIfRegexMatched && r.regexMatched(text) {
+			continue
+		}
+		work = append(work, llmWork{hash: hash, text: text})
+	}
+	if len(work) == 0 {
+		return nil
+	}
+
+	results := make(map[[32]byte][]detectors.Match, len(work))
+
+	if batchDet != nil && r.llmBatchSize > 1 {
+		for i := 0; i < len(work); i += r.llmBatchSize {
+			end := i + r.llmBatchSize
+			if end > len(work) {
+				end = len(work)
+			}
+			batch := work[i:end]
+			texts := make([]string, len(batch))
+			for j, w := range batch {
+				texts[j] = w.text
+			}
+			batchMatches := batchDet.DetectBatchWithContext(ctx, texts)
+			for j, w := range batch {
+				if j < len(batchMatches) {
+					results[w.hash] = batchMatches[j]
+				}
+			}
+		}
+		return results
+	}
+
+	sem := make(chan struct{}, r.llmConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, w := range work {
+		wg.Add(1)
+		go func(w llmWork) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			matches := llmDet.DetectWithContext(ctx, w.text)
+			mu.Lock()
+			results[w.hash] = matches
+			mu.Unlock()
+		}(w)
+	}
+	wg.Wait()
+	return results
+}
+
+func (r *Redactor) regexMatched(text string) bool {
+	for _, det := range r.detectors {
+		if _, ok := det.(ContextDetector); ok {
+			continue
+		}
+		if len(det.Detect(text)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Redactor) collectLLMStrings(v any, skipLLM bool, seen map[[32]byte]string) {
 	switch val := v.(type) {
 	case string:
-		redacted, cats := r.redactString(ctx, val, skipLLM)
+		if skipLLM {
+			return
+		}
+		hash := contentHash(val)
+		if _, ok := seen[hash]; !ok {
+			seen[hash] = val
+		}
+	case map[string]any:
+		for k, vv := range val {
+			if protocolKeys[k] {
+				continue
+			}
+			r.collectLLMStrings(vv, skipLLM || llmSkipKeys[k], seen)
+		}
+	case []any:
+		for _, vv := range val {
+			r.collectLLMStrings(vv, skipLLM, seen)
+		}
+	}
+}
+
+func (r *Redactor) walk(ctx context.Context, v any, categories *[]string, skipLLM bool, changed *bool, llmResults map[[32]byte][]detectors.Match) any {
+	switch val := v.(type) {
+	case string:
+		redacted, cats := r.redactString(ctx, val, skipLLM, llmResults)
 		*categories = append(*categories, cats...)
+		if redacted != val {
+			*changed = true
+		}
 		return redacted
 	case map[string]any:
 		for k, vv := range val {
 			if protocolKeys[k] {
 				continue
 			}
-			val[k] = r.walk(ctx, vv, categories, skipLLM || llmSkipKeys[k])
+			val[k] = r.walk(ctx, vv, categories, skipLLM || llmSkipKeys[k], changed, llmResults)
 		}
 		return val
 	case []any:
 		for i, vv := range val {
-			val[i] = r.walk(ctx, vv, categories, skipLLM)
+			val[i] = r.walk(ctx, vv, categories, skipLLM, changed, llmResults)
 		}
 		return val
 	default:
@@ -144,23 +303,43 @@ func (r *Redactor) walk(ctx context.Context, v any, categories *[]string, skipLL
 	}
 }
 
-// redactString runs all detectors against s and replaces every detected
-// substring with a placeholder token, returning the rewritten string and the
-// categories that matched. Overlapping matches are resolved by preferring
-// the earliest, longest match.
-func (r *Redactor) redactString(ctx context.Context, s string, skipLLM bool) (string, []string) {
+func (r *Redactor) redactString(ctx context.Context, s string, skipLLM bool, llmResults map[[32]byte][]detectors.Match) (string, []string) {
+	hash := contentHash(s)
+	if r.cache != nil {
+		if redacted, cats, ok := r.cache.Get(hash, skipLLM); ok {
+			return redacted, cats
+		}
+	}
+
 	var all []detectors.Match
+	var regexMatched bool
 	for _, det := range r.detectors {
 		if cd, ok := det.(ContextDetector); ok {
 			if skipLLM {
 				continue
 			}
+			if r.skipLLMIfRegexMatched && regexMatched {
+				continue
+			}
+			if llmResults != nil {
+				if matches, ok := llmResults[hash]; ok {
+					all = append(all, matches...)
+					continue
+				}
+			}
 			all = append(all, cd.DetectWithContext(ctx, s)...)
 			continue
 		}
-		all = append(all, det.Detect(s)...)
+		matches := det.Detect(s)
+		if len(matches) > 0 {
+			regexMatched = true
+		}
+		all = append(all, matches...)
 	}
 	if len(all) == 0 {
+		if r.cache != nil {
+			r.cache.Put(hash, skipLLM, s, nil)
+		}
 		return s, nil
 	}
 
@@ -176,7 +355,7 @@ func (r *Redactor) redactString(ctx context.Context, s string, skipLLM bool) (st
 	last := 0
 	for _, m := range all {
 		if m.Start < last {
-			continue // overlaps a previously-handled match
+			continue
 		}
 		b.WriteString(s[last:m.Start])
 		b.WriteString(r.store.PlaceholderFor(m.Value))
@@ -184,5 +363,10 @@ func (r *Redactor) redactString(ctx context.Context, s string, skipLLM bool) (st
 		last = m.End
 	}
 	b.WriteString(s[last:])
-	return b.String(), categories
+	redacted := b.String()
+
+	if r.cache != nil {
+		r.cache.Put(hash, skipLLM, redacted, categories)
+	}
+	return redacted, categories
 }

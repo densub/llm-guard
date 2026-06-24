@@ -50,6 +50,13 @@ func TestDefault(t *testing.T) {
 		t.Errorf("LogFile = %q, want %q", cfg.LogFile, wantLog)
 	}
 
+	if !cfg.Cache.Enabled {
+		t.Error("Cache.Enabled = false, want true")
+	}
+	if cfg.Cache.MaxEntries != 10000 {
+		t.Errorf("Cache.MaxEntries = %d, want 10000", cfg.Cache.MaxEntries)
+	}
+
 	if !cfg.Detectors.Regex.Enabled {
 		t.Error("Detectors.Regex.Enabled = false, want true")
 	}
@@ -72,6 +79,12 @@ func TestDefault(t *testing.T) {
 	}
 	if llm.RequestTimeoutMS != 3000 || llm.OverallTimeoutMS != 4000 {
 		t.Errorf("LLMFallback timeouts = (%d, %d), want (3000, 4000)", llm.RequestTimeoutMS, llm.OverallTimeoutMS)
+	}
+	if llm.Concurrency != 4 {
+		t.Errorf("LLMFallback.Concurrency = %d, want 4", llm.Concurrency)
+	}
+	if llm.BatchSize != 8 {
+		t.Errorf("LLMFallback.BatchSize = %d, want 8", llm.BatchSize)
 	}
 	if llm.LlamacppRelease != "latest" {
 		t.Errorf("LLMFallback.LlamacppRelease = %q, want latest", llm.LlamacppRelease)

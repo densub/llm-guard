@@ -35,10 +35,17 @@ func NewStore() *Store {
 // same placeholder.
 func (s *Store) PlaceholderFor(value string) string {
 	h := hashValue(value)
+	placeholder := placeholderOpen + h + placeholderClose
+	s.mu.RLock()
+	_, ok := s.values[h]
+	s.mu.RUnlock()
+	if ok {
+		return placeholder
+	}
 	s.mu.Lock()
 	s.values[h] = value
 	s.mu.Unlock()
-	return placeholderOpen + h + placeholderClose
+	return placeholder
 }
 
 // Lookup returns the original value for a given placeholder hash, if known.
