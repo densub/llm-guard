@@ -20,7 +20,7 @@ func newTestRedactor(t *testing.T) *redact.Redactor {
 	if err != nil {
 		t.Fatalf("NewRegexDetector: %v", err)
 	}
-	return redact.New(redact.NewStore(), 0, d)
+	return redact.New(redact.NewStore(), 0, redact.RedactorOptions{}, d)
 }
 
 // TestProxy_RedactsRequestAndRestoresResponse verifies that a secret in the

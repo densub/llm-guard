@@ -490,6 +490,15 @@ func buildRedactor(cfg *config.Config) (*redact.Redactor, func(), error) {
 	}
 
 	var llmBudget time.Duration
+	opts := redact.RedactorOptions{
+		SkipLLMIfRegexMatched: cfg.Detectors.LLMFallback.SkipIfRegexMatched,
+		LLMConcurrency:        cfg.Detectors.LLMFallback.Concurrency,
+		LLMBatchSize:          cfg.Detectors.LLMFallback.BatchSize,
+	}
+	if cfg.Cache.Enabled {
+		opts.Cache = redact.NewDetectionCache(cfg.Cache.MaxEntries)
+	}
+
 	if cfg.Detectors.LLMFallback.Enabled {
 		if det, llmCleanup, ok := startLLMFallback(cfg.Detectors.LLMFallback); ok {
 			dets = append(dets, det)
@@ -498,7 +507,7 @@ func buildRedactor(cfg *config.Config) (*redact.Redactor, func(), error) {
 		}
 	}
 
-	return redact.New(store, llmBudget, dets...), cleanup, nil
+	return redact.New(store, llmBudget, opts, dets...), cleanup, nil
 }
 
 // startLLMFallback attempts to start the local llama-server subprocess and

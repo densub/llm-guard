@@ -13,7 +13,7 @@ func TestRestoringWriter_SplitAcrossWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegexDetector: %v", err)
 	}
-	redactor := redact.New(redact.NewStore(), 0, d)
+	redactor := redact.New(redact.NewStore(), 0, redact.RedactorOptions{}, d)
 
 	const secret = "AKIAIOSFODNN7EXAMPLE"
 	redactedBytes, _ := redactor.Redact([]byte(secret))
@@ -50,7 +50,7 @@ func TestRestoringWriter_UnknownPlaceholderPassesThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegexDetector: %v", err)
 	}
-	redactor := redact.New(redact.NewStore(), 0, d)
+	redactor := redact.New(redact.NewStore(), 0, redact.RedactorOptions{}, d)
 
 	input := "no secrets here ⟦RG:deadbeef⟧ end"
 	var buf bytes.Buffer

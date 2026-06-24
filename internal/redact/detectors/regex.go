@@ -7,6 +7,7 @@ package detectors
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // Match represents a single detected sensitive substring within a piece of text.
@@ -60,6 +61,25 @@ func BuiltinCategories() []string {
 type namedPattern struct {
 	category string
 	re       *regexp.Regexp
+	triggers []string
+}
+
+// builtinTriggers lists cheap literal substrings that must appear for a pattern
+// to possibly match. Patterns with no triggers always run.
+var builtinTriggers = map[string][]string{
+	"aws_access_key":             {"AKIA"},
+	"aws_secret_key":             {"aws_secret"},
+	"gcp_api_key":                {"AIza"},
+	"github_token":               {"ghp_", "gho_", "ghu_", "ghs_", "ghr_"},
+	"gitlab_token":               {"glpat-"},
+	"slack_token":                {"xox"},
+	"stripe_key":                 {"sk_live_"},
+	"openai_key":                 {"sk-"},
+	"anthropic_key":              {"sk-ant-"},
+	"private_key_block":          {"-----BEGIN"},
+	"jwt":                        {"eyJ"},
+	"generic_api_key_assignment": {"api", "key", "secret", "token", "password", "passwd", "pwd"},
+	"email":                      {"@"},
 }
 
 // RegexDetector applies a configured set of built-in and custom regex
@@ -83,7 +103,11 @@ func NewRegexDetector(categories []string, custom []CustomPattern) (*RegexDetect
 		if err != nil {
 			return nil, fmt.Errorf("compiling builtin pattern %q: %w", cat, err)
 		}
-		d.patterns = append(d.patterns, namedPattern{category: cat, re: re})
+		d.patterns = append(d.patterns, namedPattern{
+			category: cat,
+			re:       re,
+			triggers: builtinTriggers[cat],
+		})
 	}
 
 	for _, c := range custom {
@@ -91,7 +115,11 @@ func NewRegexDetector(categories []string, custom []CustomPattern) (*RegexDetect
 		if err != nil {
 			return nil, fmt.Errorf("compiling custom pattern %q: %w", c.Name, err)
 		}
-		d.patterns = append(d.patterns, namedPattern{category: c.Name, re: re})
+		d.patterns = append(d.patterns, namedPattern{
+			category: c.Name,
+			re:       re,
+			triggers: extractTriggers(c.Pattern),
+		})
 	}
 
 	return d, nil
@@ -106,6 +134,9 @@ func (d *RegexDetector) Name() string { return "regex" }
 func (d *RegexDetector) Detect(text string) []Match {
 	var matches []Match
 	for _, p := range d.patterns {
+		if !triggersMatch(text, p.triggers) {
+			continue
+		}
 		for _, loc := range p.re.FindAllStringIndex(text, -1) {
 			matches = append(matches, Match{
 				Category: p.category,
@@ -116,4 +147,40 @@ func (d *RegexDetector) Detect(text string) []Match {
 		}
 	}
 	return matches
+}
+
+func triggersMatch(text string, triggers []string) bool {
+	if len(triggers) == 0 {
+		return true
+	}
+	lower := strings.ToLower(text)
+	for _, trig := range triggers {
+		if strings.Contains(lower, strings.ToLower(trig)) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractTriggers pulls a few literal runs from a regex pattern for fast-path
+// filtering. Custom patterns without literals run unconditionally.
+func extractTriggers(pattern string) []string {
+	var literals []string
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() >= 3 {
+			literals = append(literals, cur.String())
+		}
+		cur.Reset()
+	}
+	for _, r := range pattern {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-' || r == '_':
+			cur.WriteRune(r)
+		default:
+			flush()
+		}
+	}
+	flush()
+	return literals
 }

@@ -125,6 +125,89 @@ func (d *Detector) DetectWithContext(ctx context.Context, text string) []detecto
 	return matches
 }
 
+// DetectBatchWithContext implements redact.BatchContextDetector. It scores
+// multiple strings in one /completion call when len(texts) > 1.
+func (d *Detector) DetectBatchWithContext(ctx context.Context, texts []string) [][]detectors.Match {
+	if len(texts) == 0 {
+		return nil
+	}
+	if len(texts) == 1 {
+		return [][]detectors.Match{d.DetectWithContext(ctx, texts[0])}
+	}
+
+	filtered := make([]string, len(texts))
+	copy(filtered, texts)
+	for i, text := range filtered {
+		if len(text) < d.minLen || len(text) > d.maxLen {
+			filtered[i] = ""
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, d.timeout)
+	defer cancel()
+
+	reqBody, err := json.Marshal(completionRequest{
+		Prompt:      buildBatchPrompt(filtered),
+		Grammar:     jsonStringArrayOfArraysGrammar,
+		NPredict:    512,
+		Temperature: 0,
+	})
+	if err != nil {
+		return nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.server.BaseURL+"/completion", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := d.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var result completionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
+	}
+
+	var batch [][]string
+	if err := json.Unmarshal([]byte(result.Content), &batch); err != nil {
+		return nil
+	}
+
+	out := make([][]detectors.Match, len(texts))
+	for i, text := range texts {
+		if len(text) < d.minLen || len(text) > d.maxLen {
+			continue
+		}
+		var candidates []string
+		if i < len(batch) {
+			candidates = batch[i]
+		}
+		for _, c := range candidates {
+			if c == "" {
+				continue
+			}
+			for _, start := range allIndexes(text, c) {
+				out[i] = append(out[i], detectors.Match{
+					Category: Category,
+					Value:    c,
+					Start:    start,
+					End:      start + len(c),
+				})
+			}
+		}
+	}
+	return out
+}
+
 // allIndexes returns the start byte offsets of every non-overlapping
 // occurrence of substr in s.
 func allIndexes(s, substr string) []int {

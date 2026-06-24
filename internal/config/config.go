@@ -17,7 +17,14 @@ type Config struct {
 	Listen    string          `yaml:"listen"`
 	Upstream  string          `yaml:"upstream"`
 	LogFile   string          `yaml:"log_file"`
+	Cache     CacheConfig     `yaml:"cache"`
 	Detectors DetectorsConfig `yaml:"detectors"`
+}
+
+// CacheConfig configures the in-memory redaction result cache.
+type CacheConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	MaxEntries int  `yaml:"max_entries"`
 }
 
 // DetectorsConfig groups settings for each detector type.
@@ -65,6 +72,18 @@ type LLMFallbackConfig struct {
 	// calls for a single proxied request.
 	OverallTimeoutMS int `yaml:"overall_timeout_ms"`
 
+	// SkipIfRegexMatched skips the LLM pass for a string when regex
+	// detectors already found matches in that string.
+	SkipIfRegexMatched bool `yaml:"skip_if_regex_matched"`
+
+	// Concurrency is the maximum number of parallel LLM detector calls per
+	// proxied request when batching is not used.
+	Concurrency int `yaml:"concurrency"`
+
+	// BatchSize is the number of strings sent in a single LLM /completion
+	// call when batching is supported. Set to 1 to disable batching.
+	BatchSize int `yaml:"batch_size"`
+
 	// LlamacppRelease is the ggml-org/llama.cpp release tag `models pull`
 	// downloads from, or "latest".
 	LlamacppRelease string `yaml:"llamacpp_release"`
@@ -85,6 +104,10 @@ func Default() *Config {
 		Listen:   defaultListen,
 		Upstream: "",
 		LogFile:  defaultLogPath(),
+		Cache: CacheConfig{
+			Enabled:    true,
+			MaxEntries: 10000,
+		},
 		Detectors: DetectorsConfig{
 			Regex: RegexConfig{
 				Enabled:           true,
@@ -92,13 +115,16 @@ func Default() *Config {
 				CustomPatterns:    []detectors.CustomPattern{},
 			},
 			LLMFallback: LLMFallbackConfig{
-				Enabled:          false,
-				Port:             8418,
-				MinTextLen:       8,
-				MaxTextLen:       2000,
-				RequestTimeoutMS: 3000,
-				OverallTimeoutMS: 4000,
-				LlamacppRelease:  "latest",
+				Enabled:            false,
+				Port:               8418,
+				MinTextLen:         8,
+				MaxTextLen:         2000,
+				RequestTimeoutMS:   3000,
+				OverallTimeoutMS:   4000,
+				SkipIfRegexMatched: false,
+				Concurrency:        4,
+				BatchSize:          8,
+				LlamacppRelease:    "latest",
 			},
 		},
 	}

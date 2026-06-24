@@ -35,7 +35,7 @@ func newTestRedactor(t *testing.T) *Redactor {
 	if err != nil {
 		t.Fatalf("NewRegexDetector: %v", err)
 	}
-	return New(NewStore(), 0, d)
+	return New(NewStore(), 0, RedactorOptions{}, d)
 }
 
 func TestRedact_JSONRoundTrip(t *testing.T) {
@@ -113,7 +113,7 @@ func TestRedact_SameValueSamePlaceholder(t *testing.T) {
 
 func TestRedact_ContextDetectorReceivesBudgetDeadline(t *testing.T) {
 	fake := &fakeContextDetector{}
-	r := New(NewStore(), 4*time.Second, fake)
+	r := New(NewStore(), 4*time.Second, RedactorOptions{}, fake)
 
 	r.Redact([]byte(`{"a":"hello"}`))
 
@@ -124,7 +124,7 @@ func TestRedact_ContextDetectorReceivesBudgetDeadline(t *testing.T) {
 
 func TestRedact_ContextDetectorNoDeadlineWithoutBudget(t *testing.T) {
 	fake := &fakeContextDetector{}
-	r := New(NewStore(), 0, fake)
+	r := New(NewStore(), 0, RedactorOptions{}, fake)
 
 	r.Redact([]byte(`{"a":"hello"}`))
 
