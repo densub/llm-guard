@@ -27,7 +27,7 @@ func benchProxy(b *testing.B) (*Proxy, []byte) {
 	redactor := redact.New(redact.NewStore(), 0, redact.RedactorOptions{
 		Cache: redact.NewDetectionCache(10000),
 	}, d)
-	p, err := New(upstream.URL, redactor, nil)
+	p, err := New(upstream.URL, redactor, nil, Options{})
 	if err != nil {
 		b.Fatalf("New: %v", err)
 	}

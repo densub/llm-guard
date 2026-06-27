@@ -8,14 +8,37 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"llmguard/internal/redact"
 )
+
+const (
+	defaultConnectTimeout        = 10 * time.Second
+	defaultResponseHeaderTimeout = 120 * time.Second
+)
+
+// Options configures upstream HTTP client timeouts. Zero values use defaults.
+type Options struct {
+	ConnectTimeout        time.Duration
+	ResponseHeaderTimeout time.Duration
+}
+
+func (o Options) withDefaults() Options {
+	if o.ConnectTimeout <= 0 {
+		o.ConnectTimeout = defaultConnectTimeout
+	}
+	if o.ResponseHeaderTimeout <= 0 {
+		o.ResponseHeaderTimeout = defaultResponseHeaderTimeout
+	}
+	return o
+}
 
 // Proxy forwards requests to a single upstream base URL, redacting request
 // bodies and restoring response bodies along the way.
@@ -28,8 +51,9 @@ type Proxy struct {
 
 // New creates a Proxy that forwards to upstream (must include scheme and
 // host, e.g. "https://api.anthropic.com"). logger may be nil to disable
-// redaction logging.
-func New(upstream string, redactor *redact.Redactor, logger *log.Logger) (*Proxy, error) {
+// redaction logging. opts configures upstream timeouts; zero values use
+// defaults.
+func New(upstream string, redactor *redact.Redactor, logger *log.Logger, opts Options) (*Proxy, error) {
 	u, err := url.Parse(upstream)
 	if err != nil {
 		return nil, fmt.Errorf("parsing upstream URL %q: %w", upstream, err)
@@ -37,9 +61,17 @@ func New(upstream string, redactor *redact.Redactor, logger *log.Logger) (*Proxy
 	if u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("upstream URL %q must include a scheme and host", upstream)
 	}
+
+	opts = opts.withDefaults()
+	transport := &http.Transport{
+		DialContext:           (&net.Dialer{Timeout: opts.ConnectTimeout}).DialContext,
+		TLSHandshakeTimeout:   opts.ConnectTimeout,
+		ResponseHeaderTimeout: opts.ResponseHeaderTimeout,
+	}
+
 	return &Proxy{
 		upstream: u,
-		client:   &http.Client{},
+		client:   &http.Client{Transport: transport},
 		redactor: redactor,
 		logger:   logger,
 	}, nil
@@ -60,7 +92,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target.Path = singleJoiningSlash(p.upstream.Path, r.URL.Path)
 	target.RawQuery = r.URL.RawQuery
 
-	outReq, err := http.NewRequest(r.Method, target.String(), bytes.NewReader(redactedBody))
+	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), bytes.NewReader(redactedBody))
 	if err != nil {
 		http.Error(w, "failed to build upstream request", http.StatusBadGateway)
 		return
@@ -100,11 +132,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") || resp.Header.Get("Transfer-Encoding") == "chunked" {
 		rw := NewRestoringWriter(w, p.redactor)
-		_, _ = io.Copy(rw, resp.Body)
-		_ = rw.Close()
+		if _, err := io.Copy(rw, resp.Body); err != nil {
+			p.logf("streaming upstream response: %v", err)
+		}
+		if err := rw.Close(); err != nil {
+			p.logf("closing streaming response: %v", err)
+		}
 	} else {
-		respBody, _ := io.ReadAll(resp.Body)
-		_, _ = w.Write(p.redactor.Restore(respBody))
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			p.logf("reading upstream response body: %v", err)
+			p.logRequest(r.URL.Path, resp.StatusCode, categories)
+			return
+		}
+		if _, err := w.Write(p.redactor.Restore(respBody)); err != nil {
+			p.logf("writing response body: %v", err)
+		}
 		// Error response bodies are generic API error messages (no user
 		// secrets), so logging them helps diagnose upstream rejections.
 		if resp.StatusCode >= 400 {
@@ -113,6 +156,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p.logRequest(r.URL.Path, resp.StatusCode, categories)
+}
+
+func (p *Proxy) logf(format string, args ...any) {
+	if p.logger != nil {
+		p.logger.Printf(format, args...)
+	}
 }
 
 func (p *Proxy) logErrorBody(status int, header http.Header, body []byte) {

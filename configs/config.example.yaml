@@ -11,6 +11,13 @@ upstream: "https://api.anthropic.com"
 # Redaction events (category + count, never raw values) are appended here.
 log_file: "~/.local/share/llmguard/redactions.log"
 
+# Timeouts for the upstream LLM API hop. response_header_timeout_ms applies
+# only until the first response byte; streaming bodies are not capped so long
+# SSE responses can run indefinitely.
+upstream_timeouts:
+  connect_timeout_ms: 10000
+  response_header_timeout_ms: 120000
+
 # Cache redaction results for identical string fields across requests.
 cache:
   enabled: true

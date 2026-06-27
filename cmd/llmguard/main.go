@@ -378,7 +378,10 @@ func runForeground() error {
 	}
 	defer closeLog()
 
-	p, err := proxy.New(cfg.Upstream, redactor, logger)
+	p, err := proxy.New(cfg.Upstream, redactor, logger, proxy.Options{
+		ConnectTimeout:        time.Duration(cfg.UpstreamTimeouts.ConnectTimeoutMS) * time.Millisecond,
+		ResponseHeaderTimeout: time.Duration(cfg.UpstreamTimeouts.ResponseHeaderTimeoutMS) * time.Millisecond,
+	})
 	if err != nil {
 		return err
 	}

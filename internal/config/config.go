@@ -14,11 +14,21 @@ import (
 
 // Config is the top-level configuration loaded from config.yaml.
 type Config struct {
-	Listen    string          `yaml:"listen"`
-	Upstream  string          `yaml:"upstream"`
-	LogFile   string          `yaml:"log_file"`
-	Cache     CacheConfig     `yaml:"cache"`
-	Detectors DetectorsConfig `yaml:"detectors"`
+	Listen           string                 `yaml:"listen"`
+	Upstream         string                 `yaml:"upstream"`
+	LogFile          string                 `yaml:"log_file"`
+	UpstreamTimeouts UpstreamTimeoutsConfig `yaml:"upstream_timeouts"`
+	Cache            CacheConfig            `yaml:"cache"`
+	Detectors        DetectorsConfig        `yaml:"detectors"`
+}
+
+// UpstreamTimeoutsConfig bounds how long the proxy waits on the upstream LLM
+// API. ResponseHeaderTimeout applies only until the first response byte;
+// streaming bodies are not capped by Client.Timeout so long SSE streams can
+// run indefinitely.
+type UpstreamTimeoutsConfig struct {
+	ConnectTimeoutMS        int `yaml:"connect_timeout_ms"`
+	ResponseHeaderTimeoutMS int `yaml:"response_header_timeout_ms"`
 }
 
 // CacheConfig configures the in-memory redaction result cache.
@@ -104,6 +114,10 @@ func Default() *Config {
 		Listen:   defaultListen,
 		Upstream: "",
 		LogFile:  defaultLogPath(),
+		UpstreamTimeouts: UpstreamTimeoutsConfig{
+			ConnectTimeoutMS:        10000,
+			ResponseHeaderTimeoutMS: 120000,
+		},
 		Cache: CacheConfig{
 			Enabled:    true,
 			MaxEntries: 10000,

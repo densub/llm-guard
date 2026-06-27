@@ -45,6 +45,13 @@ func TestDefault(t *testing.T) {
 		t.Errorf("Upstream = %q, want empty", cfg.Upstream)
 	}
 
+	if cfg.UpstreamTimeouts.ConnectTimeoutMS != 10000 {
+		t.Errorf("UpstreamTimeouts.ConnectTimeoutMS = %d, want 10000", cfg.UpstreamTimeouts.ConnectTimeoutMS)
+	}
+	if cfg.UpstreamTimeouts.ResponseHeaderTimeoutMS != 120000 {
+		t.Errorf("UpstreamTimeouts.ResponseHeaderTimeoutMS = %d, want 120000", cfg.UpstreamTimeouts.ResponseHeaderTimeoutMS)
+	}
+
 	wantLog := filepath.Join(home, ".local", "share", dirName, logName)
 	if cfg.LogFile != wantLog {
 		t.Errorf("LogFile = %q, want %q", cfg.LogFile, wantLog)
@@ -185,6 +192,12 @@ detectors:
 	}
 	if cfg.Detectors.LLMFallback.Port != 8418 {
 		t.Errorf("LLMFallback.Port = %d, want default 8418", cfg.Detectors.LLMFallback.Port)
+	}
+	if cfg.UpstreamTimeouts.ConnectTimeoutMS != 10000 {
+		t.Errorf("UpstreamTimeouts.ConnectTimeoutMS = %d, want default 10000", cfg.UpstreamTimeouts.ConnectTimeoutMS)
+	}
+	if cfg.UpstreamTimeouts.ResponseHeaderTimeoutMS != 120000 {
+		t.Errorf("UpstreamTimeouts.ResponseHeaderTimeoutMS = %d, want default 120000", cfg.UpstreamTimeouts.ResponseHeaderTimeoutMS)
 	}
 }
 

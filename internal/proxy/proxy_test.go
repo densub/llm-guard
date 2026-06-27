@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"llmguard/internal/redact"
 	"llmguard/internal/redact/detectors"
@@ -42,7 +44,7 @@ func TestProxy_RedactsRequestAndRestoresResponse(t *testing.T) {
 	defer upstream.Close()
 
 	redactor := newTestRedactor(t)
-	p, err := New(upstream.URL, redactor, nil)
+	p, err := New(upstream.URL, redactor, nil, Options{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -107,7 +109,7 @@ func TestProxy_RestoresSSEStream(t *testing.T) {
 	defer upstream.Close()
 
 	redactor := newTestRedactor(t)
-	p, err := New(upstream.URL, redactor, nil)
+	p, err := New(upstream.URL, redactor, nil, Options{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -130,5 +132,149 @@ func TestProxy_RestoresSSEStream(t *testing.T) {
 	want := fmt.Sprintf("data: %s\n\n", secret)
 	if string(respBody) != want {
 		t.Errorf("got %q, want %q", respBody, want)
+	}
+}
+
+func TestProxy_UpstreamConnectTimeout(t *testing.T) {
+	// RFC 5737 TEST-NET-1; unrouted, so TCP connect should time out.
+	redactor := newTestRedactor(t)
+	p, err := New("http://192.0.2.1:9", redactor, nil, Options{
+		ConnectTimeout:        100 * time.Millisecond,
+		ResponseHeaderTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	start := time.Now()
+	resp, err := http.Post(front.URL+"/v1/chat", "application/json", strings.NewReader(`{"text":"hello"}`))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("request took %v, expected connect timeout near 100ms", elapsed)
+	}
+}
+
+func TestProxy_UpstreamResponseHeaderTimeout(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	redactor := newTestRedactor(t)
+	p, err := New(upstream.URL, redactor, nil, Options{
+		ConnectTimeout:        time.Second,
+		ResponseHeaderTimeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	front := httptest.NewServer(p)
+	defer front.Close()
+
+	start := time.Now()
+	resp, err := http.Post(front.URL+"/v1/chat", "application/json", strings.NewReader(`{"text":"hello"}`))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	if elapsed > time.Second {
+		t.Errorf("request took %v, expected header timeout near 50ms", elapsed)
+	}
+}
+
+func TestProxy_ReturnsWhenContextCanceledMidFlight(t *testing.T) {
+	upstreamStarted := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(upstreamStarted)
+		time.Sleep(300 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	p, err := New(upstream.URL, newTestRedactor(t), nil, Options{
+		ConnectTimeout:        time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(`{"text":"hello"}`))
+	req = req.WithContext(ctx)
+
+	serveDone := make(chan struct{})
+	go func() {
+		p.ServeHTTP(httptest.NewRecorder(), req)
+		close(serveDone)
+	}()
+
+	select {
+	case <-upstreamStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream handler did not start")
+	}
+	cancel()
+
+	start := time.Now()
+	select {
+	case <-serveDone:
+		if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+			t.Fatalf("ServeHTTP took %v after cancel, want well under 200ms", elapsed)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("ServeHTTP did not return after client context was canceled")
+	}
+}
+
+func TestProxy_CanceledContextBeforeUpstream(t *testing.T) {
+	upstreamCalled := make(chan struct{}, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled <- struct{}{}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	p, err := New(upstream.URL, newTestRedactor(t), nil, Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(`{"text":"hello"}`))
+	req = req.WithContext(ctx)
+	rw := httptest.NewRecorder()
+	p.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", rw.Code)
+	}
+	select {
+	case <-upstreamCalled:
+		t.Error("upstream was called despite canceled client context")
+	default:
 	}
 }
