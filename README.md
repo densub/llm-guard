@@ -1,5 +1,8 @@
 # llm-guard
 
+[![CI](https://github.com/densub/llm-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/densub/llm-guard/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 A local proxy that sits between your AI agents and remote LLM APIs (OpenAI,
 Anthropic, or any other HTTP API). It scans outgoing requests for secrets,
 API keys, and other sensitive data, replaces them with placeholder tokens
@@ -44,7 +47,7 @@ Add your own patterns (e.g. internal project codenames, customer IDs) via
 Requires Go (see `go.mod` for the version used to build).
 
 ```sh
-git clone <this repo> && cd llm-guard
+git clone https://github.com/densub/llm-guard.git && cd llm-guard
 go build -o llmguard ./cmd/llmguard
 ```
 
@@ -189,3 +192,20 @@ afterwards (`llmguard stop && llmguard start --detach`).
   before being redacted, to guard against hallucinated spans.
 
 See `configs/config.example.yaml` for all `llm_fallback` options.
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
+development setup, testing, and pull request guidelines.
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+If you discover a security vulnerability, please follow our
+[security policy](SECURITY.md) and report it privately — do not open a public
+issue.
+
+## License
+
+llm-guard is licensed under the [Apache License 2.0](LICENSE).
