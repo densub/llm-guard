@@ -18,11 +18,13 @@ func (t terminalIO) Write(p []byte) (int, error) { return t.out.Write(p) }
 func (t terminalIO) Fd() uintptr                 { return t.in.Fd() }
 
 func openTerminalIO() (terminalIO, error) {
-	in, err := os.Open("/dev/tty")
+	// Must open O_RDWR so the survey library can both read keystrokes and
+	// write the prompt/menu to the same fd.
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 	if err != nil {
 		return terminalIO{}, err
 	}
-	return terminalIO{in: in, out: in}, nil
+	return terminalIO{in: tty, out: tty}, nil
 }
 
 func isTerminalFile(f *os.File) bool {
