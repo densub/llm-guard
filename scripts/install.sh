@@ -7,6 +7,7 @@
 #   LLM_GUARD_REPO    git remote (default: https://github.com/densub/llm-guard.git)
 #   LLM_GUARD_BRANCH  branch to clone (default: main)
 #   LLM_GUARD_BIN_DIR install directory (default: ~/.local/bin)
+#   LLM_GUARD_AGENTS  non-interactive agent list, e.g. openai,claude,cursor
 
 set -euo pipefail
 
@@ -20,18 +21,22 @@ dim()  { printf '\033[2m%s\033[0m\n' "$*"; }
 bold "llm-guard installer"
 echo
 
-# If the script lives inside a checkout, build from there (local dev).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCRIPT_DIR}/../go.mod" ]]; then
-  SRC_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-  CLEANUP_SRC=false
-else
+# Local dev: script file inside a checkout. curl|bash has no script path (BASH_SOURCE unset).
+CLEANUP_SRC=true
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "${SCRIPT_DIR}/../go.mod" ]]; then
+    SRC_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+    CLEANUP_SRC=false
+  fi
+fi
+
+if [[ "${CLEANUP_SRC}" == true ]]; then
   if ! command -v git >/dev/null 2>&1; then
     echo "Error: git is required to download llm-guard." >&2
     exit 1
   fi
   SRC_DIR="$(mktemp -d)"
-  CLEANUP_SRC=true
   trap 'rm -rf "${SRC_DIR}"' EXIT
   dim "Cloning ${REPO} (${BRANCH})..."
   git clone --depth 1 --branch "${BRANCH}" "${REPO}" "${SRC_DIR}"
@@ -57,7 +62,17 @@ if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
   echo
 fi
 
-"${BIN_DIR}/llmguard" install "$@"
+INSTALL_ARGS=("$@")
+if [[ -n "${LLM_GUARD_AGENTS:-}" ]]; then
+  INSTALL_ARGS=(--agents "${LLM_GUARD_AGENTS}")
+fi
+
+# curl|bash feeds the script on stdin — reattach the real terminal for prompts.
+if [[ -e /dev/tty ]] && [[ ! -t 0 ]]; then
+  "${BIN_DIR}/llmguard" install "${INSTALL_ARGS[@]}" < /dev/tty
+else
+  "${BIN_DIR}/llmguard" install "${INSTALL_ARGS[@]}"
+fi
 
 if [[ "${CLEANUP_SRC}" == true ]]; then
   rm -rf "${SRC_DIR}"

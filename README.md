@@ -51,6 +51,12 @@ Add your own patterns (e.g. internal project codenames, customer IDs) via
 curl -fsSL https://raw.githubusercontent.com/densub/llm-guard/main/scripts/install.sh | bash
 ```
 
+For non-interactive installs (CI, scripts), set agents explicitly:
+
+```sh
+LLM_GUARD_AGENTS=claude curl -fsSL .../install.sh | bash
+```
+
 This will:
 
 1. Clone the repo and build the `llmguard` binary (requires [Go](https://go.dev/dl/))
