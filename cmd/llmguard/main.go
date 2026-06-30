@@ -509,8 +509,10 @@ func runForeground() error {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	showStopBanner := false
 	go func() {
 		<-sigCh
+		showStopBanner = true
 		srv.Close()
 	}()
 
@@ -525,6 +527,9 @@ func runForeground() error {
 
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
+	}
+	if showStopBanner {
+		printStopped(os.Stdout)
 	}
 	return nil
 }
