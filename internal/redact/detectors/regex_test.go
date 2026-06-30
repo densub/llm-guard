@@ -23,6 +23,11 @@ func TestRegexDetector_Builtin(t *testing.T) {
 		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dGVzdHNpZ25hdHVyZQ"},
 		{"generic_api_key_assignment", "api_key=abcd1234efgh5678"},
 		{"email", "alice@example.com"},
+		{"ssn", "123-45-6789"},
+		{"credit_card", "4111 1111 1111 1111"},
+		{"phone_us", "(555) 123-4567"},
+		{"phone_intl", "+442079460123"},
+		{"iban", "GB33BUKB20201555555555"},
 	}
 
 	for _, tc := range cases {
@@ -52,6 +57,15 @@ func TestRegexDetector_Builtin(t *testing.T) {
 func TestNewRegexDetector_UnknownCategory(t *testing.T) {
 	if _, err := NewRegexDetector([]string{"not_a_real_category"}, nil); err == nil {
 		t.Fatal("expected error for unknown category, got nil")
+	}
+}
+
+func TestLuhnValid(t *testing.T) {
+	if !luhnValid("4111 1111 1111 1111") {
+		t.Fatal("expected valid Visa test number")
+	}
+	if luhnValid("4111 1111 1111 1112") {
+		t.Fatal("expected invalid number to fail Luhn")
 	}
 }
 

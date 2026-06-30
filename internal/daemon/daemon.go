@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // PidFilePath returns the path to llm-guard's pidfile:
@@ -63,6 +64,25 @@ func Stop(path string) error {
 	if err != nil {
 		return fmt.Errorf("llm-guard is not running (no pidfile)")
 	}
+	return stopPID(path, pid)
+}
+
+// StopIfRunning sends SIGTERM to the running process (if any), waits up to
+// timeout for it to exit, and removes the pidfile. Returns nil when nothing
+// was running.
+func StopIfRunning(path string, timeout time.Duration) error {
+	pid, err := Read(path)
+	if err != nil {
+		return nil
+	}
+	if !IsRunning(pid) {
+		_ = Remove(path)
+		return nil
+	}
+	return stopPIDAndWait(path, pid, timeout)
+}
+
+func stopPID(path string, pid int) error {
 	if !IsRunning(pid) {
 		_ = Remove(path)
 		return fmt.Errorf("llm-guard is not running (stale pidfile removed)")
@@ -75,4 +95,18 @@ func Stop(path string) error {
 		return fmt.Errorf("sending SIGTERM to pid %d: %w", pid, err)
 	}
 	return Remove(path)
+}
+
+func stopPIDAndWait(path string, pid int, timeout time.Duration) error {
+	if err := stopPID(path, pid); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !IsRunning(pid) {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("timed out waiting for llm-guard (pid %d) to stop", pid)
 }

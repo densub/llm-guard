@@ -188,6 +188,9 @@ func (r *Redactor) prefetchLLMResults(ctx context.Context, data any) map[[32]byt
 
 	work := make([]llmWork, 0, len(seen))
 	for hash, text := range seen {
+		if isTestDataContext(text) {
+			continue
+		}
 		if r.skipLLMIfRegexMatched && r.regexMatched(text) {
 			continue
 		}
@@ -315,7 +318,7 @@ func (r *Redactor) redactString(ctx context.Context, s string, skipLLM bool, llm
 	var regexMatched bool
 	for _, det := range r.detectors {
 		if cd, ok := det.(ContextDetector); ok {
-			if skipLLM {
+			if skipLLM || isTestDataContext(s) {
 				continue
 			}
 			if r.skipLLMIfRegexMatched && regexMatched {
@@ -336,6 +339,7 @@ func (r *Redactor) redactString(ctx context.Context, s string, skipLLM bool, llm
 		}
 		all = append(all, matches...)
 	}
+	all = filterTestExemptMatches(s, all)
 	if len(all) == 0 {
 		if r.cache != nil {
 			r.cache.Put(hash, skipLLM, s, nil)

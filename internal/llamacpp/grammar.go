@@ -31,14 +31,20 @@ ws     ::= [ \t\n\r]*
 // within their chat format.
 const systemPrompt = `You are a privacy filter that finds sensitive substrings in text and returns them as a JSON array of strings.`
 
-const userPromptTemplate = `Identify any sensitive information in the TEXT below that should NOT be shared with a third-party AI service: full names of people, company/organization names, internal project codenames, customer/account identifiers, physical addresses, phone numbers, or other confidential details. Do not flag generic or public information.
+const userPromptTemplate = `Identify any sensitive information in the TEXT below that should NOT be shared with a third-party AI service: full names of people, company/organization names, internal project codenames, customer/account identifiers, physical addresses, phone numbers, Social Security numbers, credit card numbers, bank account details, or other confidential details. Do not flag generic or public information.
+
+If the TEXT explicitly states that values are test data, examples, synthetic, dummy, fake, placeholder, demo, mock, sandbox, not real, not actual, not production, fictional, or made up, return [] and do not flag anything in that block.
 
 Respond with ONLY a JSON array of the exact substrings to redact, copied verbatim from TEXT. If nothing is sensitive, respond with [].
 
 TEXT:
 %s`
 
-const batchUserPromptTemplate = `Identify sensitive information in each numbered TEXT block below. Respond with ONLY a JSON array of JSON string arrays: one inner array per TEXT block, in the same order. Each inner array lists exact substrings to redact from that block, copied verbatim. Use [] for blocks with nothing sensitive.
+const batchUserPromptTemplate = `Identify sensitive information in each numbered TEXT block below. Flag full names, company names, internal codenames, customer identifiers, addresses, phone numbers, Social Security numbers, credit card numbers, bank account details, and other confidential details. Do not flag generic or public information.
+
+If a TEXT block explicitly states that its values are test data, examples, synthetic, dummy, fake, placeholder, demo, mock, sandbox, not real, not actual, not production, fictional, or made up, return [] for that block.
+
+Respond with ONLY a JSON array of JSON string arrays: one inner array per TEXT block, in the same order. Each inner array lists exact substrings to redact from that block, copied verbatim. Use [] for blocks with nothing sensitive.
 
 %s`
 

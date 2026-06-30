@@ -24,7 +24,8 @@ reaches your agent.
 1. The request body is parsed (if JSON) and every string value is scanned
    against a set of regex detectors (AWS/GCP/GitHub/GitLab/Slack/Stripe/
    OpenAI/Anthropic keys, private key blocks, JWTs, generic
-   `key=value`/`key: value` secret assignments, emails — see
+   `key=value`/`key: value` secret assignments, emails, SSNs, credit
+   card numbers, phone numbers, and IBANs — see
    `internal/redact/detectors/regex.go`), plus an optional local LLM pass
    for free-form sensitive content (see below).
 2. Each match is replaced with a placeholder token like `⟦RG:a1b2c3d4⟧` and
@@ -83,6 +84,7 @@ custom URL), then writes `~/.config/llmguard/config.yaml` (see
 ```sh
 llmguard start            # foreground
 llmguard start --detach   # background; logs to ~/.local/share/llmguard/daemon.log
+llmguard restart          # stop (if running) and start in background
 llmguard status
 llmguard stop
 ```
@@ -151,9 +153,10 @@ tail -f ~/.local/share/llmguard/redactions.log
 
 ## Optional: local LLM fallback detector
 
-Regex catches structured secrets (keys, tokens, emails) but misses free-form
-sensitive content — names, internal project codenames, customer IDs,
-addresses. llm-guard can optionally run a small local LLM
+Regex catches structured secrets (keys, tokens, emails, SSNs, credit
+cards, phone numbers, IBANs) but misses free-form sensitive content —
+names, internal project codenames, customer IDs, addresses. llm-guard can
+optionally run a small local LLM
 (`Qwen2.5-0.5B-Instruct`, ~0.5B params, ~490MB as a Q4 GGUF) as an additional
 detection pass over each string field.
 
@@ -176,7 +179,7 @@ llmguard models status    # check what's installed and whether enabled
 
 `models pull` updates `server_path`/`model_path` in your config and asks
 whether to set `detectors.llm_fallback.enabled: true`. Restart llm-guard
-afterwards (`llmguard stop && llmguard start --detach`).
+afterwards (`llmguard restart`).
 
 ### What it costs
 

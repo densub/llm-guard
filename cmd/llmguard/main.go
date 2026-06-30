@@ -44,7 +44,7 @@ func main() {
 			"in the response.",
 	}
 
-	root.AddCommand(initCmd(), startCmd(), stopCmd(), statusCmd(), testCmd(), modelsCmd())
+	root.AddCommand(initCmd(), startCmd(), stopCmd(), restartCmd(), statusCmd(), testCmd(), modelsCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
@@ -140,6 +140,29 @@ func stopCmd() *cobra.Command {
 	}
 }
 
+func restartCmd() *cobra.Command {
+	var detach bool
+	cmd := &cobra.Command{
+		Use:   "restart",
+		Short: "Stop the proxy if running and start it again",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pidPath, err := daemon.PidFilePath()
+			if err != nil {
+				return err
+			}
+			if err := daemon.StopIfRunning(pidPath, 5*time.Second); err != nil {
+				return err
+			}
+			if detach {
+				return startDetached()
+			}
+			return runForeground()
+		},
+	}
+	cmd.Flags().BoolVar(&detach, "detach", true, "run in the background")
+	return cmd
+}
+
 func statusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
@@ -192,7 +215,7 @@ func testCmd() *cobra.Command {
 
 			sample := `{
   "messages": [
-    {"role": "user", "content": "Here is my AWS key AKIAIOSFODNN7EXAMPLE, my GitHub token ghp_1234567890abcdefghijklmnopqrstuvwxyz12, and my email alice@example.com. Please review this code."}
+    {"role": "user", "content": "Here is my AWS key AKIAIOSFODNN7EXAMPLE, my GitHub token ghp_1234567890abcdefghijklmnopqrstuvwxyz12, my email alice@example.com, SSN 123-45-6789, card 4111 1111 1111 1111, and phone (555) 123-4567. Please review this code."}
   ]
 }`
 
@@ -301,7 +324,7 @@ func modelsPullCmd() *cobra.Command {
 			fmt.Printf("\nServer binary: %s\n", serverPath)
 			fmt.Printf("Model file:    %s\n", modelPath)
 			if cfg.Detectors.LLMFallback.Enabled {
-				fmt.Println("\nLLM fallback enabled. Restart llm-guard (`llmguard stop` then `llmguard start --detach`) to apply.")
+				fmt.Println("\nLLM fallback enabled. Restart llm-guard (`llmguard restart`) to apply.")
 			} else {
 				fmt.Printf("\nTo enable the LLM fallback later, set `detectors.llm_fallback.enabled: true` in %s\n", cfgPath)
 			}

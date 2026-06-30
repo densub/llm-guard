@@ -40,6 +40,11 @@ detectors:
       - jwt
       - generic_api_key_assignment
       - email
+      - ssn
+      - credit_card
+      - phone_us
+      - phone_intl
+      - iban
     # Add your own patterns, e.g. internal project codenames:
     custom_patterns: []
     #   - name: internal_proj
@@ -47,6 +52,9 @@ detectors:
 
   # Optional local-LLM semantic detection pass for free-form sensitive
   # content regex can't catch (e.g. names, internal codenames, addresses).
+  # When text explicitly labels values as test/example/synthetic data,
+  # the LLM pass and secret-style regex matches are skipped; structured
+  # PII (SSN, credit card, phone, IBAN, email) is always redacted.
   # Run `llmguard models pull` to download the llama-server binary and a
   # small GGUF model and populate server_path/model_path below, then set
   # enabled: true. If no prebuilt llama-server is available for your
