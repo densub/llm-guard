@@ -1,1 +1,40 @@
+# Binaries
 /llmguard
+/llmguard-*
+llmguard
+llmguard-*
+
+# Go build & test artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.*
+*.coverprofile
+*.prof
+
+# Dependency vendoring (if used locally)
+/vendor/
+
+# IDE & editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local env & secrets
+.env
+.env.*
+!.env.example
+
+# llm-guard runtime state (lives under ~/.local/share/llmguard at runtime)
+*.pid
+*.log
