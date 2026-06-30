@@ -62,16 +62,19 @@ if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
   echo
 fi
 
-INSTALL_ARGS=("$@")
+INSTALL_ARGS=()
+if [[ $# -gt 0 ]]; then
+  INSTALL_ARGS=("$@")
+fi
 if [[ -n "${LLM_GUARD_AGENTS:-}" ]]; then
   INSTALL_ARGS=(--agents "${LLM_GUARD_AGENTS}")
 fi
 
-# curl|bash feeds the script on stdin — reattach the real terminal for prompts.
-if [[ -e /dev/tty ]] && [[ ! -t 0 ]]; then
-  "${BIN_DIR}/llmguard" install "${INSTALL_ARGS[@]}" < /dev/tty
-else
+# curl|bash: Go opens /dev/tty directly for interactive prompts.
+if ((${#INSTALL_ARGS[@]} > 0)); then
   "${BIN_DIR}/llmguard" install "${INSTALL_ARGS[@]}"
+else
+  "${BIN_DIR}/llmguard" install
 fi
 
 if [[ "${CLEANUP_SRC}" == true ]]; then

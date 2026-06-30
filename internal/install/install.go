@@ -2,7 +2,6 @@
 package install
 
 import (
-	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -51,13 +50,13 @@ func Run(opts Options) error {
 	agents := opts.Agents
 	if len(agents) == 0 {
 		var err error
-		agents, err = promptAgents(opts.Reader, out)
+		agents, err = chooseAgents(opts.Reader)
 		if err != nil {
 			return err
 		}
 	}
 
-	upstream, err := resolveUpstream(agents, opts.Upstream, opts.Reader, out)
+	upstream, err := resolveUpstream(agents, opts.Upstream, opts.Reader)
 	if err != nil {
 		return err
 	}
@@ -162,39 +161,24 @@ func agentsFilePath() (string, error) {
 	return filepath.Join(stateDir, "agents"), nil
 }
 
-func promptAgents(r io.Reader, w io.Writer) ([]Agent, error) {
-	reader := bufio.NewReader(r)
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Which AI agents do you use?")
-	fmt.Fprintln(w, "  1) OpenAI / Codex CLI")
-	fmt.Fprintln(w, "  2) Claude Code")
-	fmt.Fprintln(w, "  3) Cursor IDE")
-	fmt.Fprint(w, "Enter numbers separated by commas (e.g. 1,2): ")
-
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		return nil, fmt.Errorf("reading agent choice: %w", err)
+func resolveUpstream(agents []Agent, explicit string, r io.Reader) (string, error) {
+	if explicit != "" {
+		return normalizeUpstream(explicit)
 	}
 
-	choices := parseChoices(line)
-	if len(choices) == 0 {
-		return nil, fmt.Errorf("select at least one agent (1, 2, or 3)")
-	}
+	hasClaude := containsAgent(agents, AgentClaude)
+	hasOpenAI := containsAgent(agents, AgentOpenAI) || containsAgent(agents, AgentCursor)
 
-	var agents []Agent
-	for _, c := range choices {
-		switch c {
-		case 1:
-			agents = append(agents, AgentOpenAI)
-		case 2:
-			agents = append(agents, AgentClaude)
-		case 3:
-			agents = append(agents, AgentCursor)
-		default:
-			return nil, fmt.Errorf("invalid choice %d (use 1, 2, or 3)", c)
-		}
+	switch {
+	case hasClaude && !hasOpenAI:
+		return "https://api.anthropic.com", nil
+	case hasOpenAI && !hasClaude:
+		return "https://api.openai.com", nil
+	case hasClaude && hasOpenAI:
+		return promptUpstream(r)
+	default:
+		return "https://api.openai.com", nil
 	}
-	return agents, nil
 }
 
 func parseChoices(line string) []int {
@@ -229,44 +213,6 @@ func parseChoices(line string) []int {
 		}
 	}
 	return out
-}
-
-func resolveUpstream(agents []Agent, explicit string, r io.Reader, w io.Writer) (string, error) {
-	if explicit != "" {
-		return normalizeUpstream(explicit)
-	}
-
-	hasClaude := containsAgent(agents, AgentClaude)
-	hasOpenAI := containsAgent(agents, AgentOpenAI) || containsAgent(agents, AgentCursor)
-
-	switch {
-	case hasClaude && !hasOpenAI:
-		return "https://api.anthropic.com", nil
-	case hasOpenAI && !hasClaude:
-		return "https://api.openai.com", nil
-	case hasClaude && hasOpenAI:
-		reader := bufio.NewReader(r)
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "You selected agents that use different API providers.")
-		fmt.Fprintln(w, "llm-guard proxies to one upstream at a time — which should it use?")
-		fmt.Fprintln(w, "  1) OpenAI    (https://api.openai.com)")
-		fmt.Fprintln(w, "  2) Anthropic (https://api.anthropic.com)")
-		fmt.Fprint(w, "Choice [1-2]: ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return "", fmt.Errorf("reading upstream choice: %w", err)
-		}
-		switch strings.TrimSpace(line) {
-		case "1", "":
-			return "https://api.openai.com", nil
-		case "2":
-			return "https://api.anthropic.com", nil
-		default:
-			return "", fmt.Errorf("invalid upstream choice")
-		}
-	default:
-		return "https://api.openai.com", nil
-	}
 }
 
 func normalizeUpstream(s string) (string, error) {

@@ -1,7 +1,6 @@
 package install
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -51,17 +50,31 @@ func TestNormalizeUpstream(t *testing.T) {
 }
 
 func TestResolveUpstreamSingleAgent(t *testing.T) {
-	up, err := resolveUpstream([]Agent{AgentClaude}, "", nil, &bytes.Buffer{})
+	up, err := resolveUpstream([]Agent{AgentClaude}, "", strings.NewReader(""))
 	if err != nil || up != "https://api.anthropic.com" {
 		t.Fatalf("claude: got %q, err %v", up, err)
 	}
-	up, err = resolveUpstream([]Agent{AgentOpenAI}, "", nil, &bytes.Buffer{})
+	up, err = resolveUpstream([]Agent{AgentOpenAI}, "", strings.NewReader(""))
 	if err != nil || up != "https://api.openai.com" {
 		t.Fatalf("openai: got %q, err %v", up, err)
 	}
-	up, err = resolveUpstream([]Agent{AgentCursor}, "", nil, &bytes.Buffer{})
+	up, err = resolveUpstream([]Agent{AgentCursor}, "", strings.NewReader(""))
 	if err != nil || up != "https://api.openai.com" {
 		t.Fatalf("cursor: got %q, err %v", up, err)
+	}
+}
+
+func TestAgentsFromLabels(t *testing.T) {
+	agents, err := agentsFromLabels([]string{labelClaude, labelOpenAI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 2 || agents[0] != AgentClaude || agents[1] != AgentOpenAI {
+		t.Fatalf("unexpected agents: %v", agents)
+	}
+	_, err = agentsFromLabels(nil)
+	if err == nil {
+		t.Fatal("expected error for empty selection")
 	}
 }
 
