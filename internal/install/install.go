@@ -34,7 +34,7 @@ type Options struct {
 // Run performs the install flow: configure upstream, start the proxy, write
 // shell exports, and print a ready summary.
 func Run(opts Options) error {
-	if opts.Reader == nil {
+	if opts.Reader == nil && isInteractiveReader(os.Stdin) {
 		opts.Reader = os.Stdin
 	}
 	if opts.Writer == nil {
