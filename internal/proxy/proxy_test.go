@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,8 +18,12 @@ import (
 )
 
 func newTestRedactor(t *testing.T) *redact.Redactor {
+	return newTestRedactorWithCategories(t, []string{"aws_access_key"})
+}
+
+func newTestRedactorWithCategories(t *testing.T, categories []string) *redact.Redactor {
 	t.Helper()
-	d, err := detectors.NewRegexDetector([]string{"aws_access_key"}, nil)
+	d, err := detectors.NewRegexDetector(categories, nil)
 	if err != nil {
 		t.Fatalf("NewRegexDetector: %v", err)
 	}
@@ -82,7 +87,15 @@ func TestProxy_RedactsRequestAndRestoresResponse(t *testing.T) {
 // from the upstream over text/event-stream, split across multiple flushed
 // writes, is restored to the original secret in the client response.
 func TestProxy_RestoresSSEStream(t *testing.T) {
-	const secret = "AKIAIOSFODNN7EXAMPLE"
+	testProxyRestoresSSE(t, "AKIAIOSFODNN7EXAMPLE")
+}
+
+func TestProxy_RestoresSSEStream_QuotedSecret(t *testing.T) {
+	testProxyRestoresSSE(t, `api_key = "anasbdn198h291ebkhjabsdbbasbd"`)
+}
+
+func testProxyRestoresSSE(t *testing.T, secret string) {
+	t.Helper()
 	placeholderRe := regexp.MustCompile(`⟦RG:[0-9a-f]{8}⟧`)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +112,8 @@ func TestProxy_RestoresSSEStream(t *testing.T) {
 			t.Fatal("upstream ResponseWriter does not support flushing")
 		}
 
-		chunk := fmt.Sprintf("data: %s\n\n", placeholder)
+		chunkPayload, _ := json.Marshal(map[string]string{"text": placeholder})
+		chunk := fmt.Sprintf("data: %s\n\n", chunkPayload)
 		mid := len(chunk) / 2
 		fmt.Fprint(w, chunk[:mid])
 		flusher.Flush()
@@ -108,7 +122,7 @@ func TestProxy_RestoresSSEStream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	redactor := newTestRedactor(t)
+	redactor := newTestRedactorWithCategories(t, []string{"aws_access_key", "generic_api_key_assignment"})
 	p, err := New(upstream.URL, redactor, nil, Options{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -117,8 +131,11 @@ func TestProxy_RestoresSSEStream(t *testing.T) {
 	front := httptest.NewServer(p)
 	defer front.Close()
 
-	reqBody := fmt.Sprintf(`{"text":"my key is %s"}`, secret)
-	resp, err := http.Post(front.URL+"/v1/chat", "application/json", strings.NewReader(reqBody))
+	reqBodyBytes, err := json.Marshal(map[string]string{"text": secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(front.URL+"/v1/chat", "application/json", bytes.NewReader(reqBodyBytes))
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
@@ -129,7 +146,8 @@ func TestProxy_RestoresSSEStream(t *testing.T) {
 		t.Fatalf("reading response: %v", err)
 	}
 
-	want := fmt.Sprintf("data: %s\n\n", secret)
+	wantPayload, _ := json.Marshal(map[string]string{"text": secret})
+	want := fmt.Sprintf("data: %s\n\n", wantPayload)
 	if string(respBody) != want {
 		t.Errorf("got %q, want %q", respBody, want)
 	}

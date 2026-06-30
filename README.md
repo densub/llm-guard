@@ -45,6 +45,32 @@ Add your own patterns (e.g. internal project codenames, customer IDs) via
 
 ## Install
 
+### One command (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/densub/llm-guard/main/scripts/install.sh | bash
+```
+
+This will:
+
+1. Clone the repo and build the `llmguard` binary (requires [Go](https://go.dev/dl/))
+2. Install it to `~/.local/bin/llmguard`
+3. Ask which agents you use (OpenAI/Codex, Claude Code, Cursor)
+4. Write config, add `BASE_URL` exports to your shell profile, and start the proxy in the background
+5. Print a ready summary with the env vars to use
+
+Re-run anytime to reconfigure. From a git checkout you can also run:
+
+```sh
+./scripts/install.sh
+```
+
+For **Claude Code**, the installer also writes `ANTHROPIC_BASE_URL` to
+`~/.claude/settings.json` (the recommended persistent config). Exit any
+running `claude` session and start a new one after installing.
+
+### Manual install
+
 Requires Go (see `go.mod` for the version used to build).
 
 ```sh

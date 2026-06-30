@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 
 	"llmguard/internal/config"
 	"llmguard/internal/daemon"
+	"llmguard/internal/install"
 	"llmguard/internal/llamacpp"
 	"llmguard/internal/proxy"
 	"llmguard/internal/redact"
@@ -44,11 +46,77 @@ func main() {
 			"in the response.",
 	}
 
-	root.AddCommand(initCmd(), startCmd(), stopCmd(), restartCmd(), statusCmd(), testCmd(), modelsCmd())
+	root.AddCommand(installCmd(), envCmd(), initCmd(), startCmd(), stopCmd(), restartCmd(), statusCmd(), testCmd(), modelsCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
+	}
+}
+
+func installCmd() *cobra.Command {
+	var (
+		agents    []string
+		upstream  string
+		skipStart bool
+		noProfile bool
+	)
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Configure llm-guard for your agents, start the proxy, and set up shell exports",
+		Long: "Interactive setup that writes config, starts the proxy in the background,\n" +
+			"adds BASE_URL exports to your shell profile, and prints a ready summary.\n\n" +
+			"Usually invoked by scripts/install.sh after building the binary.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var parsed []install.Agent
+			for _, a := range agents {
+				switch strings.ToLower(strings.TrimSpace(a)) {
+				case "openai":
+					parsed = append(parsed, install.AgentOpenAI)
+				case "claude":
+					parsed = append(parsed, install.AgentClaude)
+				case "cursor":
+					parsed = append(parsed, install.AgentCursor)
+				default:
+					return fmt.Errorf("unknown agent %q (use openai, claude, or cursor)", a)
+				}
+			}
+			return install.Run(install.Options{
+				Agents:    parsed,
+				Upstream:  upstream,
+				SkipStart: skipStart,
+				NoProfile: noProfile,
+			})
+		},
+	}
+	cmd.Flags().StringSliceVar(&agents, "agents", nil, "agents to configure: openai, claude, cursor")
+	cmd.Flags().StringVar(&upstream, "upstream", "", "upstream API: openai, anthropic, or full URL")
+	cmd.Flags().BoolVar(&skipStart, "skip-start", false, "configure only; do not start the proxy")
+	cmd.Flags().BoolVar(&noProfile, "no-profile", false, "do not write exports to the shell profile")
+	return cmd
+}
+
+func envCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "env",
+		Short: "Print shell exports for configured agents (eval in your shell)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			agents, err := install.LoadSavedAgents()
+			if err != nil {
+				return err
+			}
+			if len(agents) == 0 {
+				return fmt.Errorf("no saved agent config — run `llmguard install` first")
+			}
+			cfg, err := loadOrDefaultConfig()
+			if err != nil {
+				return err
+			}
+			for _, line := range install.EnvExports(cfg.Listen, agents) {
+				fmt.Println(line)
+			}
+			return nil
+		},
 	}
 }
 
@@ -131,10 +199,10 @@ func stopCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := daemon.Stop(pidPath); err != nil {
+			if err := daemon.StopOrFind(pidPath, listenAddrFromConfig()); err != nil {
 				return err
 			}
-			fmt.Println("llm-guard stopped")
+			printStopped(os.Stdout)
 			return nil
 		},
 	}
@@ -150,7 +218,7 @@ func restartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := daemon.StopIfRunning(pidPath, 5*time.Second); err != nil {
+			if err := daemon.StopOrFindAndWait(pidPath, listenAddrFromConfig(), 5*time.Second); err != nil {
 				return err
 			}
 			if detach {
@@ -172,29 +240,41 @@ func statusCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pid, err := daemon.Read(pidPath)
+
+			cfg, err := loadOrDefaultConfig()
 			if err != nil {
-				fmt.Println("llm-guard is not running")
-				return nil
-			}
-			if !daemon.IsRunning(pid) {
-				fmt.Println("llm-guard is not running (stale pidfile removed)")
-				_ = daemon.Remove(pidPath)
-				return nil
+				return err
 			}
 
-			fmt.Printf("llm-guard is running (pid %d)\n", pid)
-			cfgPath, err := config.Path()
-			if err == nil && config.Exists(cfgPath) {
-				if cfg, err := config.Load(cfgPath); err == nil {
-					fmt.Printf("  listening on %s\n", cfg.Listen)
-					fmt.Printf("  upstream     %s\n", cfg.Upstream)
-					fmt.Printf("  log file     %s\n", cfg.LogFile)
+			pid, running := runningPID(pidPath, cfg.Listen)
+			info := statusDisplay{
+				Running:  running,
+				Listen:   cfg.Listen,
+				Upstream: cfg.Upstream,
+				LogFile:  cfg.LogFile,
+				PID:      pid,
+			}
+			if running {
+				stateDir, err := config.StateDir()
+				if err == nil {
+					info.DaemonLog = filepath.Join(stateDir, "daemon.log")
 				}
 			}
+			printStatus(os.Stdout, info)
 			return nil
 		},
 	}
+}
+
+func runningPID(pidPath, listenAddr string) (int, bool) {
+	if pid, err := daemon.Read(pidPath); err == nil && daemon.IsRunning(pid) {
+		return pid, true
+	}
+	if pid, err := daemon.FindListenerPID(listenAddr); err == nil && daemon.IsRunning(pid) {
+		return pid, true
+	}
+	_ = daemon.Remove(pidPath)
+	return 0, false
 }
 
 func testCmd() *cobra.Command {
@@ -413,12 +493,19 @@ func runForeground() error {
 	if err != nil {
 		return err
 	}
+
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", cfg.Listen, err)
+	}
+
 	if err := daemon.Write(pidPath, os.Getpid()); err != nil {
+		_ = ln.Close()
 		return err
 	}
 	defer daemon.Remove(pidPath)
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: p}
+	srv := &http.Server{Handler: p}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -427,10 +514,16 @@ func runForeground() error {
 		srv.Close()
 	}()
 
-	fmt.Printf("llm-guard listening on %s -> %s\n", cfg.Listen, cfg.Upstream)
-	fmt.Printf("logging redactions to %s\n", cfg.LogFile)
+	if os.Getenv("LLM_GUARD_NO_BANNER") == "" {
+		printStarted(os.Stdout, startDisplay{
+			Listen:   cfg.Listen,
+			Upstream: cfg.Upstream,
+			LogFile:  cfg.LogFile,
+			PID:      os.Getpid(),
+		})
+	}
 
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil
@@ -447,12 +540,23 @@ func startDetached() error {
 		return fmt.Errorf("no config found at %s — run `llmguard init` first", cfgPath)
 	}
 
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+
 	pidPath, err := daemon.PidFilePath()
 	if err != nil {
 		return err
 	}
 	if pid, err := daemon.Read(pidPath); err == nil && daemon.IsRunning(pid) {
 		return fmt.Errorf("llm-guard is already running (pid %d)", pid)
+	}
+	if daemon.AddrInUse(cfg.Listen) {
+		if pid, err := daemon.FindListenerPID(cfg.Listen); err == nil {
+			return fmt.Errorf("llm-guard is already running on %s (pid %d); use `llmguard stop`", cfg.Listen, pid)
+		}
+		return fmt.Errorf("port %s is already in use", cfg.Listen)
 	}
 
 	exe, err := os.Executable()
@@ -472,6 +576,7 @@ func startDetached() error {
 	defer logFile.Close()
 
 	cmd := exec.Command(exe, "start")
+	cmd.Env = append(os.Environ(), "LLM_GUARD_NO_BANNER=1")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = detachSysProcAttr()
@@ -479,13 +584,33 @@ func startDetached() error {
 		return fmt.Errorf("starting background process: %w", err)
 	}
 
-	if err := daemon.Write(pidPath, cmd.Process.Pid); err != nil {
-		return err
+	if err := daemon.WaitForListen(cfg.Listen, 5*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		return fmt.Errorf("llm-guard failed to start (see %s): %w", logPath, err)
 	}
 
-	fmt.Printf("llm-guard started in background (pid %d)\n", cmd.Process.Pid)
-	fmt.Printf("logs: %s\n", logPath)
+	pid := cmd.Process.Pid
+	if recorded, err := daemon.Read(pidPath); err == nil {
+		pid = recorded
+	}
+
+	printStarted(os.Stdout, startDisplay{
+		Listen:   cfg.Listen,
+		Upstream: cfg.Upstream,
+		LogFile:  cfg.LogFile,
+		PID:      pid,
+		Detached: true,
+		LogPath:  logPath,
+	})
 	return nil
+}
+
+func listenAddrFromConfig() string {
+	cfg, err := loadOrDefaultConfig()
+	if err != nil {
+		return config.Default().Listen
+	}
+	return cfg.Listen
 }
 
 func loadOrDefaultConfig() (*config.Config, error) {

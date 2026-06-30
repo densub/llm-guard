@@ -47,7 +47,7 @@ var builtinPatterns = map[string]string{
 	"anthropic_key":              `sk-ant-[A-Za-z0-9_-]{20,}`,
 	"private_key_block":          `-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`,
 	"jwt":                        `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`,
-	"generic_api_key_assignment": `(?i)(api[_-]?key|secret|token|password|passwd|pwd)\s*[=:]\s*['"]?[A-Za-z0-9_\-/+=]{8,}['"]?`,
+	"generic_api_key_assignment": `(?i)(api[_-]?key(?:_\w+)*|secret|token|password|passwd|pwd)\s*[=:]\s*['"]?[A-Za-z0-9_\-/+=]{8,}['"]?`,
 	"email":                      `[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`,
 	"ssn": `\b\d{3}[-\s]\d{2}[-\s]\d{4}\b`,
 	"credit_card": `\b(?:4[0-9]{3}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|5[1-5][0-9]{2}[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4}|3[47][0-9]{2}[-\s]?[0-9]{6}[-\s]?[0-9]{5}|6(?:011|5[0-9]{2})[-\s]?[0-9]{4}[-\s]?[0-9]{4}[-\s]?[0-9]{4})\b`,

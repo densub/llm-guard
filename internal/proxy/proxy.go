@@ -131,7 +131,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/event-stream") || resp.Header.Get("Transfer-Encoding") == "chunked" {
-		rw := NewRestoringWriter(w, p.redactor)
+		var rw interface {
+			io.Writer
+			Close() error
+		}
+		if strings.Contains(ct, "text/event-stream") {
+			rw = NewSSERestoringWriter(w, p.redactor)
+		} else {
+			rw = NewRestoringWriter(w, p.redactor)
+		}
 		if _, err := io.Copy(rw, resp.Body); err != nil {
 			p.logf("streaming upstream response: %v", err)
 		}
@@ -145,7 +153,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.logRequest(r.URL.Path, resp.StatusCode, categories)
 			return
 		}
-		if _, err := w.Write(p.redactor.Restore(respBody)); err != nil {
+		if _, err := w.Write(p.redactor.RestoreResponse(respBody, ct)); err != nil {
 			p.logf("writing response body: %v", err)
 		}
 		// Error response bodies are generic API error messages (no user

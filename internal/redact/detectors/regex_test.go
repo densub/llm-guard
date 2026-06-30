@@ -54,6 +54,22 @@ func TestRegexDetector_Builtin(t *testing.T) {
 	}
 }
 
+func TestRegexDetector_GenericAPIKeySuffix(t *testing.T) {
+	d, err := NewRegexDetector([]string{"generic_api_key_assignment"}, nil)
+	if err != nil {
+		t.Fatalf("NewRegexDetector: %v", err)
+	}
+	sample := `api_key_database = "1231asdnashbdkahasdas"`
+	text := "my " + sample + " do you see this?"
+	matches := d.Detect(text)
+	if len(matches) == 0 {
+		t.Fatalf("expected a match in %q, got none", text)
+	}
+	if matches[0].Value != sample {
+		t.Fatalf("expected match %q, got %+v", sample, matches)
+	}
+}
+
 func TestNewRegexDetector_UnknownCategory(t *testing.T) {
 	if _, err := NewRegexDetector([]string{"not_a_real_category"}, nil); err == nil {
 		t.Fatal("expected error for unknown category, got nil")
